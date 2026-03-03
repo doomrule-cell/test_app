@@ -1,18 +1,84 @@
 workflows:
   ios-workflow:
-    name: iOS Build
+    name: iOS Build Test (M2 Instance)
     max_build_duration: 60
     instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: Codemagic_Admin
     environment:
       flutter: stable
       xcode: latest
       cocoapods: default
+      vars:
+        APP_STORE_APPLE_ID: 6759662843
+        BUNDLE_ID: "com.crossist.stocksayar"
+        APP_NAME: "Stok Sayar"
     scripts:
-      - name: Get Flutter packages
-        script: flutter packages pub get
-      - name: Build iOS
+      - name: Clean workspace
         script: |
-          flutter build ios --debug --no-codesign
+          flutter clean
+          rm -rf ios/Pods ios/Podfile.lock
+
+      - name: Initialize keychain
+        script: |
+          keychain initialize
+
+      - name: Fetch App Store distribution signing files
+        script: |
+          app-store-connect fetch-signing-files \
+            "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+
+      - name: Add certificates to keychain
+        script: |
+          keychain add-certificates
+
+      - name: Set up code signing settings on Xcode project
+        script: |
+          xcode-project use-profiles
+
+      - name: Get Flutter packages
+        script: |
+          flutter pub get
+
+      - name: Install CocoaPods
+        script: |
+          cd ios && pod install --repo-update
+
+      - name: Flutter build IPA
+        script: |
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID")
+          BUILD_NUM=$((LATEST + 1))
+          echo "Latest TestFlight build: $LATEST"
+          echo "New build number: $BUILD_NUM"
+          flutter build ipa --release \
+            --build-number=$BUILD_NUM \
+            --export-options-plist=/Users/builder/export_options.plist
+
+      - name: Verify IPA
+        script: |
+          if ls build/ios/ipa/*.ipa 1>/dev/null 2>&1; then
+            echo "IPA basariyla olusturuldu"
+            ls -la build/ios/ipa/
+          else
+            echo "IPA olusturulamadi!"
+            exit 1
+          fi
+
     artifacts:
-      - build/ios/iphoneos/*.app
-      - flutter_drive.log
+      - build/ios/ipa/*.ipa
+
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        beta_groups:
+          - "Crossist Stok Sayar Test"
+        expire_build_submitted_for_review: true
+      email:
+        recipients:
+          - gdiyar@gmail.com
+        notify:
+          success: true
+          failure: true
